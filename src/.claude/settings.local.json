@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/xiaowu/Downloads/UBA系统/第二版/venv/bin/**)",
+      "Bash(conda env *)"
+    ]
+  }
+}

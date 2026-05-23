@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UBA 第二版 — 用户行为风险分析系统</title>
+<script src="static/echarts.min.js" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js';"></script>
+<script src="static/vis-network.min.js"></script>
+<link rel="stylesheet" href="static/app.css?v=manual-mode-20260522">
+</head>
+<body>
+
+<!-- ==================== 顶部导航栏 ==================== -->
+<nav class="top-nav">
+  <div class="nav-brand">UBA · 用户行为风险分析系统 <span class="nav-version">v2.0</span></div>
+  <div class="nav-tabs" id="navTabs">
+    <button class="nav-tab active" data-tab="monitor">实时监控</button>
+    <button class="nav-tab" data-tab="table">异常检测表</button>
+    <button class="nav-tab" data-tab="detail">用户详情</button>
+    <button class="nav-tab" data-tab="graph">风险关系图</button>
+    <button class="nav-tab" data-tab="experiment">实验对比</button>
+    <button class="nav-tab" data-tab="how">系统原理</button>
+  </div>
+  <div class="nav-controls">
+    <span class="status-pill" id="statusPill">● 已连接</span>
+    <button class="btn-icon" id="modeBtn" title="切换自动/手动模式">自动</button>
+    <button class="btn-icon" id="nextLogBtn" title="手动获取下一条日志">下一条日志</button>
+    <span class="monitor-meta" id="pollIntervalLabel">间隔 5s</span>
+    <span class="monitor-meta" id="pollCountdown">下次 --</span>
+    <span class="monitor-meta" id="requestCost">耗时 --</span>
+    <span id="refreshTime">--:--:--</span>
+    <button class="btn-icon" id="pauseBtn" title="暂停/恢复轮询">⏸</button>
+    <button class="btn-icon" id="themeBtn" title="切换主题">🌓</button>
+  </div>
+</nav>
+
+<!-- ==================== Tab 1: 实时监控 ==================== -->
+<div class="tab-content active" id="tab-monitor">
+  <div class="monitor-layout">
+    <!-- 左侧：AI 解读面板 -->
+    <div class="panel ai-panel" id="aiPanel">
+      <div class="panel-header">智能解读</div>
+      <div class="panel-body" id="aiBody">
+        <div class="ai-title" id="aiTitle">等待数据…</div>
+        <div class="ai-text" id="aiText">系统启动后将自动加载分析结果。</div>
+        <ul class="ai-bullets" id="aiBullets"></ul>
+        <div class="triage-card" id="triageCard" style="display:none;">
+          <div class="triage-head">
+            <span class="triage-label">告警研判</span>
+            <span class="triage-confidence" id="triageConfidence">--</span>
+          </div>
+          <div class="triage-title" id="triageScenario">等待研判</div>
+          <div class="triage-grid">
+            <div>
+              <span class="triage-subtitle">关键证据</span>
+              <ul id="triageEvidence"></ul>
+            </div>
+            <div>
+              <span class="triage-subtitle">处置建议</span>
+              <ul id="triageActions"></ul>
+            </div>
+          </div>
+        </div>
+        <div class="ai-meta" id="aiMeta"></div>
+      </div>
+    </div>
+
+    <!-- 右侧：三个可视化图表 -->
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-title">综合风险评分</div>
+        <div class="chart-container" id="gaugeChart"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">行为基线偏离雷达图</div>
+        <div class="chart-container" id="radarChart"></div>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">SHAP 可解释性分解</div>
+        <div class="chart-container" id="shapChart"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 底部历史日志条 -->
+  <div class="log-strip-container">
+    <div class="panel-header" style="font-size:0.85rem;padding:6px 14px;">历史日志快照</div>
+    <div class="log-strip" id="logStrip"></div>
+  </div>
+
+  <!-- 错误提示 -->
+  <div class="error-bar" id="errorBar" style="display:none;">
+    <span id="errorMsg">连接后端失败</span>
+    <button class="btn-retry" id="retryBtn">重试</button>
+  </div>
+</div>
+
+<!-- ==================== Tab 2: 异常检测表 ==================== -->
+<div class="tab-content" id="tab-table">
+  <div class="table-toolbar">
+    <div class="table-controls">
+      <label>排序方式：
+        <select id="tableSortBy">
+          <option value="avg_risk">平均风险</option>
+          <option value="max_risk">最高风险</option>
+          <option value="alert_count">告警次数</option>
+          <option value="log_count">日志数量</option>
+        </select>
+      </label>
+      <label>最低风险阈值：
+        <input type="range" id="riskThreshold" min="0" max="1" step="0.05" value="0">
+        <span id="thresholdLabel">0.00</span>
+      </label>
+      <label class="search-label">
+        搜索用户：<input type="text" id="userSearch" placeholder="输入用户ID…" class="search-input">
+      </label>
+    </div>
+    <span class="table-count" id="tableCount">共 0 个用户</span>
+  </div>
+  <div class="table-wrapper">
+    <table class="anomaly-table" id="anomalyTable">
+      <thead>
+        <tr>
+          <th data-sort="rank">排名</th>
+          <th data-sort="user_id">用户ID</th>
+          <th data-sort="avg_risk">平均风险</th>
+          <th data-sort="max_risk">最高风险</th>
+          <th data-sort="alert_count">告警次数</th>
+          <th data-sort="log_count">日志量</th>
+          <th data-sort="actual_alert_count">真实告警</th>
+          <th>状态</th>
+          <th>主要风险因素</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+  <div id="tableLoading" class="loading-spinner">加载中…</div>
+</div>
+
+<!-- ==================== Tab 3: 用户详情 ==================== -->
+<div class="tab-content" id="tab-detail">
+  <div class="detail-toolbar">
+    <label>选择用户：
+      <select id="detailUserSelect" class="user-select">
+        <option value="">— 请选择 —</option>
+      </select>
+    </label>
+  </div>
+  <div id="detailContent" style="display:none;">
+    <div class="detail-summary">
+      <div class="detail-card">
+        <span class="detail-label">平均风险</span>
+        <span class="detail-value" id="detailAvgRisk">-</span>
+      </div>
+      <div class="detail-card">
+        <span class="detail-label">最高风险</span>
+        <span class="detail-value" id="detailMaxRisk">-</span>
+      </div>
+      <div class="detail-card">
+        <span class="detail-label">告警次数</span>
+        <span class="detail-value" id="detailAlertCount">-</span>
+      </div>
+      <div class="detail-card">
+        <span class="detail-label">日志总量</span>
+        <span class="detail-value" id="detailLogCount">-</span>
+      </div>
+      <div class="detail-card alert-badge" id="detailAlertBadge" style="display:none;">
+        <span class="detail-label">风险状态</span>
+        <span class="detail-value" id="detailAlertStatus">告警</span>
+      </div>
+    </div>
+    <div class="panel user-profile-panel" id="userProfilePanel">
+      <div class="panel-header">AI 用户画像总结</div>
+      <div class="panel-body">
+        <div class="profile-level" id="profileLevel">-</div>
+        <div class="profile-text" id="profileText">选择用户后生成画像总结。</div>
+        <div class="profile-tags" id="profileFactors"></div>
+        <ul class="profile-actions" id="profileActions"></ul>
+      </div>
+    </div>
+    <div class="detail-panels">
+      <div class="panel">
+        <div class="panel-header">特征数据</div>
+        <div class="panel-body"><pre id="detailFeatures" class="json-display"></pre></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header">SHAP 可解释性</div>
+        <div class="panel-body"><pre id="detailShap" class="json-display"></pre></div>
+      </div>
+    </div>
+    <div class="panel" style="margin-top:14px;">
+      <div class="panel-header">最近日志风险记录</div>
+      <div class="panel-body">
+        <div class="table-wrapper">
+          <table class="anomaly-table" id="recentLogsTable">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>风险评分</th>
+                <th>状态</th>
+                <th>主要因素</th>
+              </tr>
+            </thead>
+            <tbody id="recentLogsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="detailEmpty" class="empty-hint">请从上方下拉框选择一个用户查看详情。</div>
+</div>
+
+<!-- ==================== Tab 4: 风险关系图 ==================== -->
+<div class="tab-content" id="tab-graph">
+  <div class="graph-toolbar">
+    <span class="graph-hint">节点颜色：<span class="dot red"></span> 高风险 <span class="dot orange"></span> 中风险 <span class="dot yellow"></span> 低风险 <span class="dot blue"></span> 正常 <span class="dot green"></span> 操作类别</span>
+    <button class="btn-icon" id="graphRefreshBtn" title="重新布局">⟳ 重新布局</button>
+  </div>
+  <div id="graphContainer"></div>
+  <div id="graphLoading" class="loading-spinner">加载关系图中…</div>
+</div>
+
+<!-- ==================== Tab 5: 实验对比 ==================== -->
+<div class="tab-content" id="tab-experiment">
+  <div class="experiment-summary" id="experimentSummary">
+    <div class="summary-card">
+      <span class="summary-label">综合最佳模型</span>
+      <span class="summary-value" id="expBestModel">加载中...</span>
+      <span class="summary-note" id="expBestModelNote">按 F1 与 AUC 综合判断</span>
+    </div>
+    <div class="summary-card">
+      <span class="summary-label">异常检出能力</span>
+      <span class="summary-value" id="expBestRecall">加载中...</span>
+      <span class="summary-note" id="expBestRecallNote">召回率越高，漏报越少</span>
+    </div>
+    <div class="summary-card">
+      <span class="summary-label">告警可信度</span>
+      <span class="summary-value" id="expBestPrecision">加载中...</span>
+      <span class="summary-note" id="expBestPrecisionNote">精确率越高，误报越少</span>
+    </div>
+    <div class="summary-card">
+      <span class="summary-label">测试集异常占比</span>
+      <span class="summary-value" id="expPositiveRatio">--</span>
+      <span class="summary-note">异常检测场景更应关注召回率和 PR-AUC</span>
+    </div>
+  </div>
+
+  <div class="experiment-readout">
+    <div class="panel experiment-insight">
+      <div class="panel-header">实验结论</div>
+      <div class="panel-body">
+        <ul class="insight-list" id="experimentInsights">
+          <li>正在加载实验结果...</li>
+        </ul>
+      </div>
+    </div>
+    <div class="panel metric-guide">
+      <div class="panel-header">指标怎么读</div>
+      <div class="panel-body metric-guide-grid">
+        <div><strong>准确率</strong><span>整体判断对了多少，样本不均衡时容易偏乐观。</span></div>
+        <div><strong>精确率</strong><span>报出的告警里有多少是真的，衡量误报压力。</span></div>
+        <div><strong>召回率</strong><span>真实异常里抓到了多少，衡量漏报风险。</span></div>
+        <div><strong>F1</strong><span>精确率和召回率的平衡，适合做综合排序。</span></div>
+        <div><strong>AUC</strong><span>区分正常与异常的整体能力，越接近 1 越好。</span></div>
+        <div><strong>PR-AUC</strong><span>异常样本较少时更关键，反映告警质量。</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="experiment-grid">
+    <div class="chart-card">
+      <div class="chart-title">综合性能对比（F1 / AUC / PR-AUC）</div>
+      <div class="chart-container chart-tall" id="modelCompareChart"></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">告警质量对比（精确率 / 召回率）</div>
+      <div class="chart-container chart-tall" id="alertQualityChart"></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">安全业务指标（高危召回 / 安全代价评分）</div>
+      <div class="chart-container chart-tall" id="securityMetricChart"></div>
+      <div class="chart-note">高危召回越高越好；安全代价评分越高，代表加权漏报和误报代价越低。</div>
+    </div>
+    <div class="panel confusion-panel">
+      <div class="panel-header">混淆矩阵：误报与漏报</div>
+      <div class="panel-body">
+        <div class="confusion-toolbar" id="confusionModelTabs"></div>
+        <div class="confusion-matrix" id="confusionMatrix">
+          <div class="empty-hint">重新运行实验脚本后，将显示各模型的误报/漏报矩阵。</div>
+        </div>
+        <div class="confusion-note" id="confusionNote">安全检测更关注右下角“异常判异常”和左下角“异常漏报正常”。</div>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">ROC / PR 曲线</div>
+      <div class="chart-container chart-tall" id="curveChart"></div>
+      <div class="chart-note">ROC 越靠左上角越好；PR 曲线更适合异常占比较低的检测任务。</div>
+    </div>
+    <div class="chart-card feature-card">
+      <div class="chart-title">风险因素排行（SHAP mean(|value|)）</div>
+      <div class="chart-container chart-tall" id="featureImportanceChart"></div>
+      <div class="feature-notes" id="featureNarrativeList"></div>
+    </div>
+    <div class="panel experiment-panel">
+      <div class="panel-header">实验结果表</div>
+      <div class="panel-body">
+        <div class="table-wrapper">
+          <table class="anomaly-table" id="modelCompareTable">
+            <thead>
+              <tr>
+                <th>模型</th>
+                <th>准确率</th>
+                <th>精确率</th>
+                <th>召回率</th>
+                <th>F1</th>
+                <th>AUC</th>
+                <th>PR-AUC</th>
+                <th>高危召回</th>
+                <th>安全分</th>
+                <th>误报</th>
+                <th>漏报</th>
+                <th>延迟(ms)</th>
+              </tr>
+            </thead>
+            <tbody id="modelCompareBody"></tbody>
+          </table>
+        </div>
+        <div class="empty-hint" id="experimentHint">正在加载实验结果…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== Tab 6: 系统原理 ==================== -->
+<div class="tab-content" id="tab-how">
+  <div class="how-content">
+    <h2>系统概述</h2>
+    <p>本系统通过机器学习、专家规则与图分析技术，对用户行为日志进行实时分析，检测企业内部威胁。</p>
+    <hr>
+
+    <h3>1. 数据模拟与特征工程</h3>
+    <ul>
+      <li><strong>模拟日志：</strong>生成包含 160 个用户、4 种角色（普通员工、财务、技术、管理员）的 10 万条行为日志。</li>
+      <li><strong>特征工程：</strong>提取时间特征、滚动窗口统计、登录失败、敏感下载、操作熵、用户基线偏离、远程/未知位置和角色操作不匹配等增强特征。</li>
+      <li><strong>异常注入：</strong>异地登录、深夜批量下载、越权访问、横向移动、暴力破解等 5 类攻击场景。</li>
+    </ul>
+    <hr>
+
+    <h3>2. 异常检测算法</h3>
+    <ul>
+      <li><strong>LightGBM：</strong>基于梯度提升决策树的监督学习模型，在时间序列划分下训练，带早停机制。</li>
+      <li><strong>专家规则：</strong>覆盖深夜高敏、周末高频、远程登录失败聚集、角色操作不匹配等风险场景，与模型分数融合。</li>
+      <li><strong>多模型对比：</strong>内置 Logistic Regression、Isolation Forest、LightGBM、LightGBM + Expert Rules 对比，评估 F1、AUC、PR-AUC 和推理延迟。</li>
+    </ul>
+    <hr>
+
+    <h3>3. 风险关系图</h3>
+    <ul>
+      <li><strong>实体关系：</strong>用户与操作类别构成二分图，反映不同角色的行为模式。</li>
+      <li><strong>风险传导：</strong>高风险用户关联的可疑操作链路一目了然，便于溯源调查。</li>
+    </ul>
+    <hr>
+
+    <h3>4. 可解释性</h3>
+    <ul>
+      <li><strong>SHAP：</strong>基于博弈论的 Shapley 值分解，量化每个特征对风险评分的贡献。</li>
+      <li><strong>规则命中：</strong>单用户解释接口返回命中的专家规则、风险等级和处置建议。</li>
+      <li><strong>智能解读：</strong>本地模板规则生成自然语言解读；可选外接大模型（OpenAI 兼容接口）增强解释质量。</li>
+    </ul>
+    <hr>
+
+    <h3>5. 可视化看板</h3>
+    <ul>
+      <li><strong>实时监控：</strong>ECharts 仪表盘、雷达图、SHAP 柱状图，3 秒轮询刷新。</li>
+      <li><strong>异常检测表：</strong>所有用户排序评分，支持筛选和搜索。</li>
+      <li><strong>风险关系图：</strong>基于 vis-network 的交互式网络图，支持拖拽、缩放。</li>
+      <li><strong>实验对比：</strong>展示模型性能、全局 SHAP 特征重要性、ROC/PR 曲线和论文实验表格。</li>
+    </ul>
+    <hr>
+
+    <h2>总结</h2>
+    <p>本系统融合了监督学习、专家经验和可解释 AI，为企业内部威胁检测提供了一套完整、可落地、可演示的技术方案。</p>
+  </div>
+</div>
+
+<!-- ==================== 脚本加载 ==================== -->
+<script src="static/app.js?v=manual-mode-20260522"></script>
+</body>
+</html>
